@@ -20,7 +20,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 torch.manual_seed(1337)
 
 
-# run this line on the Terminal
+# run the below line on the Terminal, in case you don't have the "input.txt"
 # wget https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt
 with open('input.txt', 'r', encoding='utf-8') as f:
     text = f.read()
@@ -101,7 +101,7 @@ class Head(nn.Module):
         weights = q @ k.transpose(-2, -1) * emb_size**-0.5                              # (B,T,head_size) @ (B,head_size,T) -----> (B,T,T)
         weights = weights.masked_fill(self.tril[:T,:T]==0, float('-inf'))               # here T = block_size,
                                                                                         # self.tril == 0 can also be written 
-        weights = F.softmax(weights, dim=1)
+        weights = F.softmax(weights, dim=-1)
         weights = self.dropout(weights)
         # perform the Weighted-Average (out_single) of the 'Values'
         out_single = weights @ v                                                        # (B,T,T) @ (B,T,head_size) -----> (B,T,head_size)
@@ -115,7 +115,7 @@ class MultiHeadAttention(nn.Module):
         super().__init__()
         # initializes 'n_heads' instances of "Head" class
         self.multi_heads = nn.ModuleList([Head(head_size, emb_size, block_size) for _ in range(n_heads)])  
-        self.proj = nn.Linear(emb_size, emb_size)     
+        self.proj = nn.Linear(emb_size, emb_size)                                                   # head_size * n_heads = emb_size
         self.dropout = nn.Dropout(dropout)          
 
     def forward(self, x):
@@ -171,7 +171,7 @@ class Block(nn.Module):
 
 
 # Baseline Model
-class BigramLanguageModel(nn.Module):                                                              # 'nn.Module' is the base-class for all the Neural-Networks
+class GPTLanguageModel(nn.Module):                                                              # 'nn.Module' is the base-class for all the Neural-Networks
 
     def __init__(self, vocab_size):
         '''
@@ -208,6 +208,7 @@ class BigramLanguageModel(nn.Module):                                           
         x = token_emb + pos_emb                                                                 # (B,T,emb_size) + (T,emb_size) -----> (B,T,emb_size)
                                                                                                 # pos_emb.shape gets broadcasted to (B,T,emb_size)
         x = self.blocks(x)                                                                      # (B,T,emb_size)
+        x = self.lnf(x)                                                                         # (B,T,emb_size)
         logits = self.linear_head(x)                                                            # Next-token logits          
                                                                                                 # (B,T,emb_size) -----> (B,T,vocab_size)
                                                                                                                                                 
@@ -243,9 +244,10 @@ class BigramLanguageModel(nn.Module):                                           
 
             logits, loss = self.forward(idx_crop)                       # get the predictions (next-token logits) from the current token ONLY
             logits = logits[:, -1, :]                                   # We want the last generated prediction (for the new generated token) for each of the B chunks
-                                                                        # (B,T,C) --> (B,C)
+                                                                        # (B,T,vocab_size) --> (B,vocab_size)
 
-            probs = F.softmax(logits, dim=1)                            # apply Softmax to get probabilities of next tokens
+            probs = F.softmax(logits, dim=-1)                           # (B,vocab_size)
+                                                                        # apply Softmax to get probabilities of next tokens
             idx_next = torch.multinomial(probs, num_samples=1)          # sample 1 (next) token-ID for each of the B chunks, from the multinomial-distribution
                                                                         # idx_next.shape ---> (B,)
             idx = torch.cat((idx, idx_next), dim=1)                     # append the B new generated tokens to their corresponding chunks
@@ -253,7 +255,7 @@ class BigramLanguageModel(nn.Module):                                           
         return idx
 
 
-model = BigramLanguageModel(vocab_size)
+model = GPTLanguageModel(vocab_size)
 model = model.to(device)
 
 # Create a pytorch optimizer
@@ -263,7 +265,7 @@ optimizer = torch.optim.AdamW(model.parameters(),
 # TRAINING
 for epoch in range(EPOCHS):
     # every once in a while evaluate the loss on 'train' and 'val' sets
-    if epoch % eval_interval == 0:
+    if epoch % eval_interval == 0 or epoch == EPOCHS-1:
           losses = estimate_loss(model = model,
                                  eval_iterations = eval_iterations,
                                  batch_size = BATCH_SIZE,
